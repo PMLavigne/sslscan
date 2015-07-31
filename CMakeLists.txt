@@ -25,6 +25,7 @@ SET(OPENSSL_CONFIG_SCRIPT "./config")
 SET(OPENSSL_CONFIG_OPTIONS no-shared enable-md2 enable-ssl2 enable-ssl3 enable-rc5)
 SET(OPENSSL_REPO_URL "https://github.com/openssl/openssl")
 
+
 #
 # Debugging
 #
@@ -47,8 +48,7 @@ SET(MAKE make)
 # Version Number
 #
 EXECUTE_PROCESS(COMMAND ${GIT} describe --tags --always --dirty=-wip OUTPUT_VARIABLE VERSION_RAW)
-IF("${VERSION_RAW}" MATCHES "^([0-9]+)[.]([0-9]+)[.]([0-9]+)(.*)$")
-    MESSAGE("Detected sslscan version ${VERSION_RAW}")
+IF("${VERSION_RAW}" MATCHES "^([0-9]+)[.]([0-9]+)[.]([0-9]+)([^\n\r]*)")
     SET(APPLICATION_VERSION_MAJOR ${CMAKE_MATCH_1})
     SET(APPLICATION_VERSION_MINOR ${CMAKE_MATCH_2})
     SET(APPLICATION_VERSION_PATCH ${CMAKE_MATCH_3})
@@ -77,7 +77,7 @@ IF("${CMAKE_SIZEOF_VOID_P}" EQUAL "8")
     IF(APPLE)
         # It can't detect Darwin x64 itself, for some reason...
         SET(OPENSSL_CONFIG_SCRIPT "./Configure")
-        SET(OPENSSL_CONFIG_OPTIONS darwin64-x86_64-clang ${OPENSSL_CONFIG_OPTIONS})
+        SET(OPENSSL_CONFIG_OPTIONS darwin64-x86_64-cc ${OPENSSL_CONFIG_OPTIONS})
     ENDIF()
 ENDIF()
 
@@ -85,6 +85,35 @@ ENDIF()
 # Configure OpenSSL
 #
 EXECUTE_PROCESS(COMMAND "${OPENSSL_CONFIG_SCRIPT}" ${OPENSSL_CONFIG_OPTIONS} WORKING_DIRECTORY "${OPENSSL_DIR}")
+
+#
+# Detect CPU's - Concept from http://www.kitware.com/blog/home/post/63
+#
+IF(NOT DEFINED PROCESSOR_COUNT)
+    SET(PROCESSOR_COUNT 0)
+
+    IF(APPLE)
+        FIND_PROGRAM(CMD_SYSTEM_PROFILER "system_profiler")
+        IF(CMD_SYSTEM_PROFILER)
+            EXECUTE_PROCESS(COMMAND "${CMD_SYSTEM_PROFILER}" SPHardwareDataType OUTPUT_VARIABLE PROFILER_OUTPUT)
+            STRING(REGEX REPLACE "^.*Total Number of Cores: ([0-9]+).*$" "\\1" PROCESSOR_COUNT "${PROFILER_OUTPUT}")
+        ENDIF()
+    ENDIF()
+
+    IF(WIN32)
+        SET(PROCESSOR_COUNT "$ENV{NUMBER_OF_PROCESSORS}")
+    ENDIF()
+
+    SET(CPUINFO "/proc/cpuinfo")
+    IF(EXISTS "${CPUINFO}")
+        FILE(STRINGS "${CPUINFO}" PROC_MATCHES REGEX "^processor.: [0-9]+$")
+        LIST(LENGTH PROC_MATCHES PROCESSOR_COUNT)
+    ENDIF()
+ENDIF()
+
+IF(PROCESSOR_COUNT)
+    SET(MAKE "${MAKE}" -j${PROCESSOR_COUNT})
+ENDIF()
 
 #
 # Define OpenSSL Build
@@ -99,11 +128,10 @@ ADD_CUSTOM_TARGET(openssl
 # Define Executable
 #
 
-INCLUDE_DIRECTORIES(".")
-INCLUDE_DIRECTORIES("${OPENSSL_DIR}")
+INCLUDE_DIRECTORIES("${OPENSSL_DIR}/include")
 
 ADD_EXECUTABLE("${PROJECT_NAME}" sslscan.c)
 ADD_DEPENDENCIES("${PROJECT_NAME}" openssl)
-ADD_DEFINITIONS(${WARNINGS} ${OPTIMIZATION} ${CFLAGS} "-DVERSION=\\\"${APPLICATION_VERSION_STRING}\\\"")
+ADD_DEFINITIONS(${WARNINGS} ${OPTIMIZATION} ${OTHER_FLAGS} -DVERSION=\"${APPLICATION_VERSION_STRING}\")
 
 TARGET_LINK_LIBRARIES("${PROJECT_NAME}" "${OPENSSL_DIR}/libcrypto.a" "${OPENSSL_DIR}/libssl.a")
